@@ -202,3 +202,18 @@ def delete_truck(truck_id):
 def get_all_trucks():
     trucks = Truck.query.order_by(Truck.created_at.desc()).all()
     return jsonify([t.to_dict() for t in trucks]), 200
+
+
+#login
+from models.user import User
+
+@admin_bp.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    # Buscamos por el username 'admin'
+    user = User.query.filter_by(username=data.get('username')).first()
+    
+    if user and user.check_password(data.get('password')):
+        return jsonify({"status": "success", "message": "Acceso concedido"}), 200
+    
+    return jsonify({"error": "Credenciales inválidas"}), 401
