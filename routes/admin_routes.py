@@ -5,6 +5,7 @@ from models.truck import Truck
 from sqlalchemy import func, or_
 from werkzeug.utils import secure_filename
 import os
+import cloudinary.uploader
 
 admin_bp = Blueprint('admin', __name__)
 
@@ -114,34 +115,34 @@ def update_quote_amounts(quote_id):
 @admin_bp.route('/trucks', methods=['POST'])
 def create_truck():
     try:
-        # Obtener textos
         name = request.form.get('name')
         price = request.form.get('price')
         short_specs = request.form.get('short_specs')
         
-        # Archivos
         file_img = request.files.get('image_front')
         file_pdf = request.files.get('pdf_file')
 
-        img_path = ""
-        pdf_path = ""
+        img_url = ""
+        pdf_url = ""
 
+        # SUBIDA DE IMAGEN A CLOUDINARY
         if file_img:
-            filename = secure_filename(f"truck_{name.replace(' ', '_')}_{file_img.filename}")
-            file_img.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-            img_path = f"/static/uploads/trucks/{filename}"
+            # folder="inomac/trucks" organiza tus archivos en la nube
+            upload_result = cloudinary.uploader.upload(file_img, folder="inomac/trucks")
+            img_url = upload_result['secure_url']
 
+        # SUBIDA DE PDF A CLOUDINARY
         if file_pdf:
-            pdf_name = secure_filename(f"ficha_{name.replace(' ', '_')}.pdf")
-            file_pdf.save(os.path.join(current_app.config['UPLOAD_FOLDER'], pdf_name))
-            pdf_path = f"/static/uploads/trucks/{pdf_name}"
+            # resource_type="raw" es obligatorio para archivos que no son imágenes (como PDFs)
+            pdf_result = cloudinary.uploader.upload(file_pdf, folder="inomac/pdfs", resource_type="raw")
+            pdf_url = pdf_result['secure_url']
 
         new_truck = Truck(
             name=name,
             price=price,
             short_specs=short_specs,
-            image_front=img_path,
-            pdf_spec_sheet=pdf_path,
+            image_front=img_url,  # Guardamos la URL de Cloudinary
+            pdf_spec_sheet=pdf_url, # Guardamos la URL de Cloudinary
             motor=request.form.get('motor'),
             torque=request.form.get('torque'),
             transmission=request.form.get('transmission'),
@@ -170,15 +171,15 @@ def update_truck(truck_id):
         file_img = request.files.get('image_front')
         file_pdf = request.files.get('pdf_file')
 
+        # ACTUALIZACIÓN DE IMAGEN
         if file_img:
-            filename = secure_filename(f"truck_upd_{truck.id}_{file_img.filename}")
-            file_img.save(os.path.join(current_app.config['UPLOAD_FOLDER'], filename))
-            truck.image_front = f"/static/uploads/trucks/{filename}"
+            upload_result = cloudinary.uploader.upload(file_img, folder="inomac/trucks")
+            truck.image_front = upload_result['secure_url']
 
+        # ACTUALIZACIÓN DE PDF
         if file_pdf:
-            pdf_name = secure_filename(f"ficha_upd_{truck.id}.pdf")
-            file_pdf.save(os.path.join(current_app.config['UPLOAD_FOLDER'], pdf_name))
-            truck.pdf_spec_sheet = f"/static/uploads/trucks/{pdf_name}"
+            pdf_result = cloudinary.uploader.upload(file_pdf, folder="inomac/pdfs", resource_type="raw")
+            truck.pdf_spec_sheet = pdf_result['secure_url']
 
         db.session.commit()
         return jsonify({"message": "Unidad actualizada"}), 200
