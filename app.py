@@ -12,7 +12,6 @@ def create_app():
     app.config.from_object(Config)
     
     # --- CONFIGURACIÓN DE CORS ---
-    # Permitimos tanto tu entorno local como el dominio oficial de INOMAC
     CORS(app, resources={r"/api/*": {"origins": [
         "https://www.inomac.com.pe",
         "http://localhost:3000"
@@ -27,20 +26,23 @@ def create_app():
     with app.app_context():
         db.create_all() 
         
-        if not User.query.filter_by(username='admin').first():
+        admin_user = User.query.filter_by(username='admin').first()
+        if not admin_user:
             admin = User(
                 username='admin',
                 email='admin@gmail.com'
             )
             admin.set_password('admin123') 
-            
             db.session.add(admin)
             db.session.commit()
             print(">>> Base de datos inicializada y usuario admin creado.")
         
     return app
 
+# --- ESTA LÍNEA ES LA CLAVE PARA RAILWAY ---
+# Al ponerla aquí, gunicorn puede encontrar "app" al hacer "app:app"
+app = create_app()
+
 if __name__ == '__main__':
-    app = create_app()
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
