@@ -217,3 +217,110 @@ def login():
         return jsonify({"status": "success", "message": "Acceso concedido"}), 200
     
     return jsonify({"error": "Credenciales inválidas"}), 401
+
+
+# --- RECURSOS UNIFICADOS DE COTIZACIONES Y CLIENTES ---
+
+@admin_bp.route('/quotes', methods=['GET'])
+def get_all_quotes():
+    """Ruta única para obtener leads. Soporta filtros por estado, búsqueda y tipo."""
+    try:
+        page = request.args.get('page', 1, type=int)
+        status_filter = request.args.get('status', None)
+        search_query = request.args.get('search', None)
+        # Nuevo filtro: si 'only_manual' es true, solo trae los creados desde el panel
+        only_manual = request.args.get('manual', 'false').lower() == 'true'
+        
+        per_page = request.args.get('per_page', 15, type=int)
+        query = Quote.query
+        
+        # Filtro por Procedencia (Manual vs Web)
+        if only_manual:
+            query = query.filter(Quote.model_interested == "REGISTRO MANUAL (ADMIN)")
+        
+        # Filtro por Estado
+        if status_filter and status_filter != 'Todos':
+            query = query.filter_by(status=status_filter)
+            
+        # Buscador global (Nombre, RUC, Email)
+        if search_query:
+            search_all = f"%{search_query}%"
+            query = query.filter(or_(
+                Quote.fullname.like(search_all), 
+                Quote.ruc.like(search_all), 
+                Quote.email.like(search_all)
+            ))
+            
+        pagination = query.order_by(Quote.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
+        
+        return jsonify({
+            "quotes": [q.to_dict() for q in pagination.items],
+            "total_pages": pagination.pages,
+            "current_page": pagination.page
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@admin_bp.route('/quotes/<int:quote_id>', methods=['PUT', 'DELETE'])
+def manage_quote(quote_id):
+    """CRUD unificado para editar o eliminar cualquier registro (Manual o Web)"""
+    quote = Quote.query.get_or_404(quote_id)
+    
+    if request.method == 'PUT':
+        try:
+            data = request.json
+            quote.fullname = data.get('name', quote.fullname)
+            quote.email = data.get('email', quote.email)
+            quote.phone = data.get('phone', quote.phone)
+            quote.ruc = data.get('ruc', quote.ruc)
+            quote.message = data.get('message', quote.message)
+            quote.status = data.get('status', quote.status)
+            
+            db.session.commit()
+            return jsonify({"message": "Registro actualizado correctamente"}), 200
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": str(e)}), 500
+
+    if request.method == 'DELETE':
+        try:
+            db.session.delete(quote)
+            db.session.commit()
+            return jsonify({"message": "Registro eliminado del sistema"}), 200
+        except Exception as e:
+            db.session.rollback()
+            return jsonify({"error": str(e)}), 500
+        
+
+
+
+# CREAR COTI
+@admin_bp.route('/quotes/manual', methods=['POST'])
+def create_manual_quote():
+    try:
+        data = request.json
+        # Buscamos los datos del cliente ya registrado
+        customer = Quote.query.get(data.get('customer_id'))
+        if not customer:
+            return jsonify({"error": "Cliente no encontrado"}), 404
+
+        # Creamos una NUEVA fila en la tabla quotes basada en ese cliente
+        new_quote = Quote(
+            fullname=customer.fullname,
+            email=customer.email,
+            phone=customer.phone,
+            ruc=customer.ruc,
+            model_interested=data.get('model'),
+            message=f"Cotización manual creada desde el panel. Ref: {customer.id}",
+            status='Pendiente',
+            quantity=data.get('quantity', 1),
+            unit_price=data.get('unit_price', 0),
+            total_amount=data.get('total_amount', 0)
+        )
+
+        db.session.add(new_quote)
+        db.session.commit()
+        return jsonify({"message": "Cotización creada con éxito"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
