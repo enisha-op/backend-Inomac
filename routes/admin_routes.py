@@ -196,7 +196,7 @@ def update_truck(truck_id):
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
     
-    
+
 
 @admin_bp.route('/trucks/<int:truck_id>', methods=['DELETE'])
 def delete_truck(truck_id):
@@ -305,24 +305,43 @@ def manage_quote(quote_id):
 
 
 
-# CREAR COTI
+# CREAR COTI (MODO ACTUALIZACIÓN PARA EVITAR DUPLICADOS)
 @admin_bp.route('/quotes/manual', methods=['POST'])
 def create_manual_quote():
     try:
         data = request.json
-        # Buscamos los datos del cliente ya registrado
+        # 1. Buscamos el registro original del cliente
         customer = Quote.query.get(data.get('customer_id'))
+        
         if not customer:
             return jsonify({"error": "Cliente no encontrado"}), 404
 
-        # Creamos una NUEVA fila en la tabla quotes basada en ese cliente
+        # 2. LÓGICA ANTI-DUPLICADOS: 
+        # Si el registro es un "REGISTRO MANUAL", lo actualizamos en lugar de crear uno nuevo.
+        if customer.model_interested == "REGISTRO MANUAL (ADMIN)":
+            customer.model_interested = data.get('model')
+            customer.quantity = data.get('quantity', 1)
+            customer.unit_price = data.get('unit_price', 0)
+            customer.total_amount = data.get('total_amount', 0)
+            customer.message = f"Cotización formalizada desde el panel. Ref: {customer.id}"
+            
+            db.session.commit()
+            return jsonify({
+                "message": "Registro manual actualizado a cotización exitosamente",
+                "quote": customer.to_dict()
+            }), 200
+        
+        # 3. OPCIONAL: Si prefieres que siempre se actualice incluso si no es manual,
+        # quita el 'if' anterior. Si quieres permitir múltiples cotizaciones por cliente
+        # (ej: una web y una manual), mantén la lógica de creación abajo:
+        
         new_quote = Quote(
             fullname=customer.fullname,
             email=customer.email,
             phone=customer.phone,
             ruc=customer.ruc,
             model_interested=data.get('model'),
-            message=f"Cotización manual creada desde el panel. Ref: {customer.id}",
+            message=f"Nueva cotización adicional creada desde el panel. Ref: {customer.id}",
             status='Pendiente',
             quantity=data.get('quantity', 1),
             unit_price=data.get('unit_price', 0),
@@ -331,7 +350,8 @@ def create_manual_quote():
 
         db.session.add(new_quote)
         db.session.commit()
-        return jsonify({"message": "Cotización creada con éxito"}), 201
+        return jsonify({"message": "Nueva cotización creada con éxito"}), 201
+
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
