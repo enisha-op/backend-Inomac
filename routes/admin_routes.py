@@ -125,24 +125,29 @@ def create_truck():
         img_url = ""
         pdf_url = ""
 
-        # SUBIDA DE IMAGEN A CLOUDINARY
+        # SUBIDA DE IMAGEN
         if file_img:
-            # folder="inomac/trucks" organiza tus archivos en la nube
             upload_result = cloudinary.uploader.upload(file_img, folder="inomac/trucks")
             img_url = upload_result['secure_url']
 
-        # SUBIDA DE PDF A CLOUDINARY
+        # SUBIDA DE PDF (Corrección de descarga)
         if file_pdf:
-            # resource_type="raw" es obligatorio para archivos que no son imágenes (como PDFs)
-            pdf_result = cloudinary.uploader.upload(file_pdf, folder="inomac/pdfs", resource_type="raw")
+            # Usamos use_filename y resource_type="raw" para archivos no-imagen
+            pdf_result = cloudinary.uploader.upload(
+                file_pdf, 
+                folder="inomac/pdfs", 
+                resource_type="raw",
+                use_filename=True,
+                unique_filename=True
+            )
             pdf_url = pdf_result['secure_url']
 
         new_truck = Truck(
             name=name,
             price=price,
             short_specs=short_specs,
-            image_front=img_url,  # Guardamos la URL de Cloudinary
-            pdf_spec_sheet=pdf_url, # Guardamos la URL de Cloudinary
+            image_front=img_url,
+            pdf_spec_sheet=pdf_url,
             motor=request.form.get('motor'),
             torque=request.form.get('torque'),
             transmission=request.form.get('transmission'),
@@ -171,14 +176,18 @@ def update_truck(truck_id):
         file_img = request.files.get('image_front')
         file_pdf = request.files.get('pdf_file')
 
-        # ACTUALIZACIÓN DE IMAGEN
         if file_img:
             upload_result = cloudinary.uploader.upload(file_img, folder="inomac/trucks")
             truck.image_front = upload_result['secure_url']
 
-        # ACTUALIZACIÓN DE PDF
         if file_pdf:
-            pdf_result = cloudinary.uploader.upload(file_pdf, folder="inomac/pdfs", resource_type="raw")
+            pdf_result = cloudinary.uploader.upload(
+                file_pdf, 
+                folder="inomac/pdfs", 
+                resource_type="raw",
+                use_filename=True,
+                unique_filename=True
+            )
             truck.pdf_spec_sheet = pdf_result['secure_url']
 
         db.session.commit()
@@ -186,6 +195,8 @@ def update_truck(truck_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+    
+    
 
 @admin_bp.route('/trucks/<int:truck_id>', methods=['DELETE'])
 def delete_truck(truck_id):
