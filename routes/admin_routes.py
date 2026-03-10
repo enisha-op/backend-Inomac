@@ -17,21 +17,36 @@ def get_dashboard_stats():
         total_quotes = Quote.query.count()
         enterprise_count = Quote.query.filter(Quote.ruc.isnot(None), Quote.ruc != '').count()
         
-        # OBTENER TODOS LOS MODELOS PARA DESGLOSARLOS
+        # 1. OBTENER TODOS LOS MODELOS
         all_quotes = Quote.query.with_entities(Quote.model_interested).all()
         
         model_counts = {}
         for q in all_quotes:
-            # Separar por coma, limpiar espacios y contar individualmente
-            models = [m.strip() for m in q.model_interested.split(',')]
-            for model in models:
-                if model:
-                    model_counts[model] = model_counts.get(model, 0) + 1
+            if not q.model_interested:
+                continue
+                
+            # Separamos si hay varios modelos en la misma celda
+            models_in_row = [m.strip() for m in q.model_interested.split(',')]
+            
+            for m in models_in_row:
+                if not m or "REGISTRO MANUAL" in m:
+                    continue
+                
+                # --- LIMPIEZA CLAVE ---
+                # Usamos regex o split para quitar el "(2)" y quedarnos solo con el nombre
+                # "Hino 300 (2)" -> "Hino 300"
+                clean_model = m.split(' (')[0].strip()
+                
+                # Agrupamos sumando 1 por cada vez que aparece el modelo
+                model_counts[clean_model] = model_counts.get(clean_model, 0) + 1
 
-        # Convertir a formato compatible con Recharts del Front
-        chart_data = [{"name": name, "total": total} for name, total in model_counts.items()]
+        # 2. CONVERTIR A FORMATO RECHARTS (Ordenado de mayor a menor)
+        chart_data = [
+            {"name": name, "total": total} 
+            for name, total in sorted(model_counts.items(), key=lambda x: x[1], reverse=True)
+        ]
 
-        # Tendencia mensual
+        # 3. TENDENCIA MENSUAL (Sin cambios, ya agrupa por mes en SQL)
         trend_stats = db.session.query(
             func.date_format(Quote.created_at, '%Y-%m').label('month'),
             func.count(Quote.id)
@@ -42,11 +57,12 @@ def get_dashboard_stats():
         return jsonify({
             "total": total_quotes,
             "enterprises": enterprise_count,
-            "chartData": chart_data,
+            "chartData": chart_data, # Ahora viene agrupado y limpio
             "lineChartData": line_chart_data,
             "status": "success"
         }), 200
     except Exception as e:
+        print(f"Error en stats: {str(e)}") # Útil para debug
         return jsonify({"error": str(e)}), 500
 
 # --- RUTAS DE COTIZACIONES ---
@@ -93,19 +109,23 @@ def update_quote_amounts(quote_id):
         data = request.json
         quote = Quote.query.get_or_404(quote_id)
         
-        # Nota: Aquí guardamos el total_amount general enviado por el front
+        # Actualizamos el monto total (que ya viene con IGV desde el front)
         quote.total_amount = data.get('total_amount', quote.total_amount)
         
-        # Si decides guardar cantidad y precio unitario del primer modelo (simple)
-        # o manejar un JSON de items, puedes hacerlo aquí:
         items = data.get('items', [])
         if items:
-            # Guardamos los valores del primer item por compatibilidad con tu modelo Quote
-            quote.quantity = items[0].get('quantity', quote.quantity)
-            quote.unit_price = items[0].get('unit_price', quote.unit_price)
+            # Creamos el string: "Hino 300 (2), Hino 500 (1)" 
+            # Esto es mejor para saber cuántos de cada uno en el resumen
+            model_names = ", ".join([f"{i.get('name')} ({i.get('quantity')})" for i in items])
+            total_qty = sum([int(i.get('quantity', 0)) for i in items])
+            
+            quote.model_interested = model_names
+            quote.quantity = total_qty
+            # Guardamos el precio del primer item como referencia base
+            quote.unit_price = items[0].get('unit_price', 0)
 
         db.session.commit()
-        return jsonify({"message": "Montos y cantidades actualizados correctamente"}), 200
+        return jsonify({"message": "Cotización actualizada"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
