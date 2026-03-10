@@ -254,26 +254,22 @@ def login():
 
 @admin_bp.route('/quotes', methods=['GET'])
 def get_all_quotes():
-    """Ruta única para obtener leads. Soporta filtros por estado, búsqueda y tipo."""
     try:
         page = request.args.get('page', 1, type=int)
         status_filter = request.args.get('status', None)
         search_query = request.args.get('search', None)
-        # Nuevo filtro: si 'only_manual' es true, solo trae los creados desde el panel
-        only_manual = request.args.get('manual', 'false').lower() == 'true'
-        
         per_page = request.args.get('per_page', 15, type=int)
+        
         query = Quote.query
         
-        # Filtro por Procedencia (Manual vs Web)
-        if only_manual:
-            query = query.filter(Quote.model_interested == "REGISTRO MANUAL (ADMIN)")
+        # --- FILTRO IMPORTANTE ---
+        # Si estamos en la página de Quotes, NO queremos ver los registros que son solo perfiles.
+        # Solo queremos ver lo que ya tiene un modelo de camión asignado.
+        query = query.filter(Quote.model_interested != "REGISTRO MANUAL (ADMIN)")
         
-        # Filtro por Estado
         if status_filter and status_filter != 'Todos':
             query = query.filter_by(status=status_filter)
             
-        # Buscador global (Nombre, RUC, Email)
         if search_query:
             search_all = f"%{search_query}%"
             query = query.filter(or_(
@@ -330,38 +326,21 @@ def manage_quote(quote_id):
 def create_manual_quote():
     try:
         data = request.json
-        # 1. Buscamos el registro original del cliente
+        # 1. Buscamos el cliente original para copiar sus datos básicos
         customer = Quote.query.get(data.get('customer_id'))
         
         if not customer:
             return jsonify({"error": "Cliente no encontrado"}), 404
 
-        # 2. LÓGICA ANTI-DUPLICADOS: 
-        # Si el registro es un "REGISTRO MANUAL", lo actualizamos en lugar de crear uno nuevo.
-        if customer.model_interested == "REGISTRO MANUAL (ADMIN)":
-            customer.model_interested = data.get('model')
-            customer.quantity = data.get('quantity', 1)
-            customer.unit_price = data.get('unit_price', 0)
-            customer.total_amount = data.get('total_amount', 0)
-            customer.message = f"Cotización formalizada desde el panel. Ref: {customer.id}"
-            
-            db.session.commit()
-            return jsonify({
-                "message": "Registro manual actualizado a cotización exitosamente",
-                "quote": customer.to_dict()
-            }), 200
-        
-        # 3. OPCIONAL: Si prefieres que siempre se actualice incluso si no es manual,
-        # quita el 'if' anterior. Si quieres permitir múltiples cotizaciones por cliente
-        # (ej: una web y una manual), mantén la lógica de creación abajo:
-        
+        # 2. CREAMOS UNA COTIZACIÓN NUEVA (Sin importar si el anterior era manual o no)
+        # Esto evita que se sobrescriba el registro anterior.
         new_quote = Quote(
             fullname=customer.fullname,
             email=customer.email,
             phone=customer.phone,
             ruc=customer.ruc,
             model_interested=data.get('model'),
-            message=f"Nueva cotización adicional creada desde el panel. Ref: {customer.id}",
+            message=f"Cotización generada desde panel. Ref Cliente: {customer.id}",
             status='Pendiente',
             quantity=data.get('quantity', 1),
             unit_price=data.get('unit_price', 0),
@@ -370,8 +349,84 @@ def create_manual_quote():
 
         db.session.add(new_quote)
         db.session.commit()
-        return jsonify({"message": "Nueva cotización creada con éxito"}), 201
+        
+        return jsonify({
+            "message": "Nueva cotización creada con éxito",
+            "quote": new_quote.to_dict()
+        }), 201
 
     except Exception as e:
         db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+    
+
+
+@admin_bp.route('/quotes', methods=['POST'])
+def create_customer_or_quote():
+    try:
+        data = request.json
+        ruc_dni = data.get('ruc')
+
+        # VALIDACIÓN: Si envían un RUC, verificamos que no exista ya en la base de datos
+        if ruc_dni:
+            existing = Quote.query.filter_by(ruc=ruc_dni).first()
+            if existing:
+                return jsonify({
+                    "error": f"El RUC/DNI {ruc_dni} ya está registrado a nombre de {existing.fullname}."
+                }), 400
+
+        # Si no existe, creamos el registro como REGISTRO MANUAL
+        new_record = Quote(
+            fullname=data.get('fullname'),
+            email=data.get('email'),
+            phone=data.get('phone'),
+            ruc=ruc_dni,
+            model_interested="REGISTRO MANUAL (ADMIN)", # Esto marca que es solo el perfil del cliente
+            message="Cliente registrado manualmente",
+            status='Pendiente'
+        )
+
+        db.session.add(new_record)
+        db.session.commit()
+        return jsonify({"message": "Cliente registrado con éxito"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+    
+
+# RUTA ESPECIAL PARA OBTENER SOLO LOS REGISTROS DE CLIENTES (SIN MODELO ASIGNADO) PARA EL DIRECTORIO
+
+from sqlalchemy import func
+
+@admin_bp.route('/customers_directory', methods=['GET'])
+def get_customers_directory():
+    try:
+        page = request.args.get('page', 1, type=int)
+        search_query = request.args.get('search', None)
+        per_page = 15
+        
+        # Agrupamos por RUC para que no se repitan los clientes
+        # Usamos func.max(Quote.id) para obtener el registro más reciente de cada uno
+        subquery = db.session.query(
+            func.max(Quote.id).label('max_id')
+        ).group_by(Quote.ruc).subquery()
+
+        query = Quote.query.filter(Quote.id.in_(subquery))
+        
+        if search_query:
+            search_all = f"%{search_query}%"
+            query = query.filter(or_(
+                Quote.fullname.ilike(search_all), 
+                Quote.ruc.ilike(search_all),
+                Quote.email.ilike(search_all)
+            ))
+            
+        pagination = query.order_by(Quote.created_at.desc()).paginate(page=page, per_page=per_page)
+        
+        return jsonify({
+            "quotes": [q.to_dict() for q in pagination.items],
+            "total_pages": pagination.pages,
+            "current_page": pagination.page
+        }), 200
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
